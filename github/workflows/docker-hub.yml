@@ -49,6 +49,6 @@ jobs:
               "docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest",
               "docker stop proyecto-backend-ventas proyecto-backend-despachos || true",
               "docker rm proyecto-backend-ventas proyecto-backend-despachos || true",
-              "docker run -d --name proyecto-backend-ventas -p 8080:8080 -e DB_ENDPOINT=CAMBIA_POR_LA_IP_DE_TU_BD -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest",
-              "docker run -d --name proyecto-backend-despachos -p 8081:8081 -e DB_ENDPOINT=CAMBIA_POR_LA_IP_DE_TU_BD -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest"
+              "docker run -d --name proyecto-backend-ventas -p 8080:8080 -e DB_ENDPOINT=10.0.139.180 -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest",
+              "docker run -d --name proyecto-backend-despachos -p 8081:8081 -e DB_ENDPOINT=10.0.139.180 -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest"
             ]'

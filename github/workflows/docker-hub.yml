@@ -1,31 +1,54 @@
-name: Interactuar con Docker Hub
+name: Deploy Capa Backend a AWS
 
 on:
   push:
     branches:
-      - deploy # O la rama que estés usando para tus pruebas
+      - deploy  # Se ejecutará automáticamente al hacer push a la rama deploy
 
 jobs:
-  docker-job:
-    runs-on: ubuntu-latest # Esta máquina ya viene con Docker instalado
+  build-and-deploy:
+    runs-on: ubuntu-latest
 
     steps:
-      # 1. Descargar el código del repositorio
-      - name: Checkout de código
+      - name: Checkout del código
         uses: actions/checkout@v3
 
-      # 2. Autenticarse en Docker Hub usando los Secrets
-      - name: Iniciar sesión en Docker Hub
-        uses: docker/login-action@v2
+      - name: Configurar credenciales AWS Academy
+        uses: aws-actions/configure-aws-credentials@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
 
-      # 3. Hacer el PULL de la imagen
-      - name: Descargar imagen desde Docker Hub
+      - name: Autenticar en Amazon ECR
         run: |
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/tu-imagen-proyecto:latest
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+      - name: Construir y Subir imágenes a ECR
+        run: |
+          # 1. Microservicio Ventas
+          docker build -t backend-ventas ./back-Ventas_SpringBoot/Springboot-API-REST
+          docker tag backend-ventas:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest
           
-      # 4. (Opcional) Verificar que la imagen se descargó en GitHub
-      - name: Listar imágenes locales en el runner
-        run: docker images
+          # 2. Microservicio Despachos
+          docker build -t backend-despachos ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
+          docker tag backend-despachos:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest
+
+      - name: Desplegar en EC2 mediante AWS SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Desplegando microservicios de Backend con variables de BD" \
+            --parameters 'commands=[
+              "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com",
+              "docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest",
+              "docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest",
+              "docker stop proyecto-backend-ventas proyecto-backend-despachos || true",
+              "docker rm proyecto-backend-ventas proyecto-backend-despachos || true",
+              "docker run -d --name proyecto-backend-ventas -p 8080:8080 -e DB_ENDPOINT=CAMBIA_POR_LA_IP_DE_TU_BD -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest",
+              "docker run -d --name proyecto-backend-despachos -p 8081:8081 -e DB_ENDPOINT=CAMBIA_POR_LA_IP_DE_TU_BD -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest"
+            ]'

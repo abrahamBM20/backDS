@@ -1,0 +1,74 @@
+version: '3.9'
+
+services:
+  # MySQL - compartido (en producción vendría de dbDS)
+  mysql:
+    image: mysql:8.0
+    container_name: proyecto-mysql-back
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      MYSQL_DATABASE: ${DB_NAME:-proyecto_db}
+      MYSQL_USER: ${DB_USERNAME:-usuario}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-password123}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_back_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Ventas
+  api-ventas:
+    build:
+      context: ./api-ventas
+      dockerfile: Dockerfile
+    container_name: proyecto-api-ventas
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_ENDPOINT: mysql
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-proyecto_db}
+      DB_USERNAME: ${DB_USERNAME:-usuario}
+      DB_PASSWORD: ${DB_PASSWORD:-password123}
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # API Despachos
+  api-despachos:
+    build:
+      context: ./api-despachos
+      dockerfile: Dockerfile
+    container_name: proyecto-api-despachos
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_ENDPOINT: mysql
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-proyecto_db}
+      DB_USERNAME: ${DB_USERNAME:-usuario}
+      DB_PASSWORD: ${DB_PASSWORD:-password123}
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  mysql_back_data:

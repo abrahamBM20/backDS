@@ -41,6 +41,7 @@ jobs:
           docker tag backend-despachos:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest
 
+
       - name: Desplegar en EC2 mediante AWS SSM
         run: |
           aws ssm send-command \

@@ -1,54 +1,104 @@
-name: Deploy Capa Backend a AWS
+name: Deploy Capa Backend a AWS ECR y EC2
 
 on:
   push:
     branches:
-      - deploy  # Se ejecutará automáticamente al hacer push a la rama deploy
+      - deploy
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout del código
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Configurar credenciales AWS Academy
-        uses: aws-actions/configure-aws-credentials@v2
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Autenticar en Amazon ECR
-        run: |
-          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Construir y Subir imágenes a ECR
+      - name: Generar versión de imagen
+        id: image-tag
         run: |
-          # 1. Microservicio Ventas
-          docker build -t backend-ventas ./back-Ventas_SpringBoot/Springboot-API-REST
-          docker tag backend-ventas:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest
-          
-          # 2. Microservicio Despachos
-          docker build -t backend-despachos ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
-          docker tag backend-despachos:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest
+          COMMIT_SHA=${{ github.sha }}
+          SHORT_SHA=${COMMIT_SHA:0:7}
+          TIMESTAMP=$(date +%s)
+          echo "TAG=${SHORT_SHA}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "COMMIT_MESSAGE=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
 
-      - name: Desplegar en EC2 mediante AWS SSM
+      - name: Build y push - backend-ventas
+        uses: docker/build-push-action@v4
+        with:
+          context: ./api-ventas
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/backend-ventas:latest
+            ${{ env.ECR_REGISTRY }}/backend-ventas:${{ steps.image-tag.outputs.TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build y push - backend-despachos
+        uses: docker/build-push-action@v4
+        with:
+          context: ./api-despachos
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/backend-despachos:latest
+            ${{ env.ECR_REGISTRY }}/backend-despachos:${{ steps.image-tag.outputs.TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Validar imágenes ECR
+        run: |
+          aws ecr describe-images --repository-name backend-ventas --image-ids imageTag=latest --region ${{ env.AWS_REGION }}
+          aws ecr describe-images --repository-name backend-despachos --image-ids imageTag=latest --region ${{ env.AWS_REGION }}
+
+      - name: Desplegar en EC2
         run: |
           aws ssm send-command \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
-            --comment "Desplegando microservicios de Backend con variables de BD" \
+            --region ${{ env.AWS_REGION }} \
+            --comment "Deploy: ${{ steps.image-tag.outputs.COMMIT_MESSAGE }}" \
             --parameters 'commands=[
-              "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com",
-              "docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest",
-              "docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest",
-              "docker stop proyecto-backend-ventas proyecto-backend-despachos || true",
-              "docker rm proyecto-backend-ventas proyecto-backend-despachos || true",
-              "docker run -d --name proyecto-backend-ventas -p 8080:8080 -e DB_ENDPOINT=10.0.139.180 -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest",
-              "docker run -d --name proyecto-backend-despachos -p 8081:8081 -e DB_ENDPOINT=10.0.139.180 -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest"
+              "#!/bin/bash",
+              "set -e",
+              "echo \"Iniciando despliegue...\"",
+              "aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}",
+              "docker pull ${{ env.ECR_REGISTRY }}/backend-ventas:latest",
+              "docker pull ${{ env.ECR_REGISTRY }}/backend-despachos:latest",
+              "docker-compose -f /app/docker-compose.yml down || true",
+              "cd /app && docker-compose up -d",
+              "docker ps",
+              "sleep 10",
+              "curl -f http://localhost:8080/actuator/health || exit 1",
+              "curl -f http://localhost:8081/actuator/health || exit 1",
+              "echo \"Despliegue completado exitosamente\""
             ]'
+
+      - name: Notificar estado
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deploy exitoso: ${{ steps.image-tag.outputs.TAG }}"
+          else
+            echo "❌ Deploy falló"
+            exit 1
+          fi

@@ -1,0 +1,63 @@
+name: Deploy Backend a AWS
+
+on:
+  push:
+    branches:
+      - deploy
+    paths:
+      - 'api-ventas/**'
+      - 'api-despachos/**'
+      - 'docker-compose.yml'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v3
+
+      - name: Configurar credenciales AWS Academy
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Autenticar en Amazon ECR
+        run: |
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+      - name: Construir y Subir API Ventas a ECR
+        run: |
+          docker build -t backend-ventas ./api-ventas
+          docker tag backend-ventas:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest
+
+      - name: Construir y Subir API Despachos a ECR
+        run: |
+          docker build -t backend-despachos ./api-despachos
+          docker tag backend-despachos:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest
+
+      - name: Desplegar en EC2 mediante AWS SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ secrets.EC2_BACKEND_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Desplegando backend completo" \
+            --parameters 'commands=[
+              "mkdir -p /home/ec2-user/backend",
+              "cd /home/ec2-user/backend",
+              "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com",
+              "docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest",
+              "docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest",
+              "docker stop backend-ventas backend-despachos mysql-backend 2>/dev/null || true",
+              "docker rm backend-ventas backend-despachos mysql-backend 2>/dev/null || true",
+              "docker network create backend-network 2>/dev/null || true",
+              "docker run -d --name mysql-backend --network backend-network -p 3306:3306 -e MYSQL_ROOT_PASSWORD=root123 -e MYSQL_DATABASE=proyecto_db -e MYSQL_USER=usuario -e MYSQL_PASSWORD=password123 -v mysql_data:/var/lib/mysql mysql:8.0",
+              "sleep 15",
+              "docker run -d --name backend-ventas --network backend-network -p 8080:8080 -e DB_ENDPOINT=mysql-backend -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-ventas:latest",
+              "docker run -d --name backend-despachos --network backend-network -p 8081:8081 -e DB_ENDPOINT=mysql-backend -e DB_PORT=3306 -e DB_NAME=proyecto_db -e DB_USERNAME=usuario -e DB_PASSWORD=password123 -e SPRING_PROFILES_ACTIVE=docker ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend-despachos:latest"
+            ]'
